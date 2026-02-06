@@ -23,13 +23,15 @@ DESKO_VENDOR_ID = 0x0744
 DESKO_PRODUCT_ID = 0x001d
 
 
-def get_raw_data(timeout_seconds=60):
+def get_raw_data(timeout_seconds=60, debug=False):
     error_code = 0
     all_hids = hid.enumerate(DESKO_VENDOR_ID, DESKO_PRODUCT_ID)
     target_path = None
 
     if all_hids:
         target_path = all_hids[0]['path']
+        if debug:
+            print(f"[DEBUG] Found device: {all_hids[0]}")
 
     if target_path is None:
         print("There's not any non system HID class device available")
@@ -50,11 +52,16 @@ def get_raw_data(timeout_seconds=60):
         while exit_counter < max_iterations:
             exit_counter += 1
             # Use shorter timeout once data starts arriving to capture the full burst
-            timeout = 100 if got_data else 500
-            data = device.read(64, timeout_ms=timeout)
+            timeout_ms = 100 if got_data else 500
+            data = device.read(64, timeout_ms=timeout_ms)
+
+            if debug and exit_counter <= 5:
+                print(f"[DEBUG] read #{exit_counter}: data={list(data) if data else None} (len={len(data) if data else 0})")
 
             if not data:
                 if got_data:
+                    if debug:
+                        print(f"[DEBUG] Data burst finished after {exit_counter} reads")
                     # Data burst finished
                     break
                 continue
@@ -64,7 +71,12 @@ def get_raw_data(timeout_seconds=60):
 
             # Skip empty/status reports (payload is all zeros)
             if not any(payload):
+                if debug:
+                    print(f"[DEBUG] Skipping empty report: {data_list}")
                 continue
+
+            if debug:
+                print(f"[DEBUG] Got data report: {data_list}")
 
             got_data = True
             queue_data = q.get()
@@ -72,9 +84,13 @@ def get_raw_data(timeout_seconds=60):
             q.put(queue_data)
 
         if not got_data:
+            if debug:
+                print(f"[DEBUG] No data received after {exit_counter} reads")
             error_code = 2
 
-    except Exception:
+    except Exception as e:
+        if debug:
+            print(f"[DEBUG] Exception: {e}")
         error_code = 2
     finally:
         if device:
@@ -262,10 +278,10 @@ def decodeRawData(raw_data):
     return lined_data
 
 
-def get_user_data():
+def get_user_data(debug=False):
     data = {}
     try:
-        error_value = get_raw_data()
+        error_value = get_raw_data(debug=debug)
 
         if error_value == 0:
             raw_data = q.get()

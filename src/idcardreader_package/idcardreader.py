@@ -30,7 +30,6 @@ def _get_raw_data_pywinusb(timeout_seconds, debug):
             q.put(queue_data)
             got_data = True
 
-    ocr_reader = "DESKO GmbH Desk0 USB-Device"
     all_hids = hid.find_all_hid_devices()
 
     if not all_hids:
@@ -41,12 +40,11 @@ def _get_raw_data_pywinusb(timeout_seconds, debug):
         print(f"[DEBUG] Found {len(all_hids)} HID device(s)")
 
     for index, device in enumerate(all_hids):
-        device_name = f"{device.vendor_name} {device.product_name}"
         if debug:
-            print(f"[DEBUG]   #{index}: {device_name} "
+            print(f"[DEBUG]   #{index}: {device.vendor_name} {device.product_name} "
                   f"(vID=0x{device.vendor_id:04x}, pID=0x{device.product_id:04x})")
 
-        if ocr_reader in device_name:
+        if device.vendor_id == DESKO_VENDOR_ID and device.product_id == DESKO_PRODUCT_ID:
             try:
                 device.set_raw_data_handler(sample_handler)
                 device.open()

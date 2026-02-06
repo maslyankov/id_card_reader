@@ -25,7 +25,7 @@ DESKO_VENDOR_ID = 0x0744
 DESKO_PRODUCT_ID = 0x001d
 
 
-def get_raw_data():
+def get_raw_data(timeout_seconds=60):
     error_code = 0
     all_hids = hid.enumerate(DESKO_VENDOR_ID, DESKO_PRODUCT_ID)
     target_path = None
@@ -42,10 +42,14 @@ def get_raw_data():
         device = hid.device()
         device.open_path(target_path)
 
+        print("Ready - please scan a document...")
+
         got_data = False
+        # Wait up to timeout_seconds for the first scan, then read the burst quickly
+        max_iterations = timeout_seconds * 2  # 500ms per iteration while waiting
         exit_counter = 0
 
-        while exit_counter < 30:
+        while exit_counter < max_iterations:
             exit_counter += 1
             # Use shorter timeout once data starts arriving to capture the full burst
             timeout = 100 if got_data else 500

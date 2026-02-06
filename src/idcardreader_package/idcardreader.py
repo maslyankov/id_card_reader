@@ -21,20 +21,17 @@ else:
     _EMPTY_ROW = [48] + [0] * 31  # 32 bytes
 
 
+DESKO_VENDOR_ID = 0x0744
+DESKO_PRODUCT_ID = 0x001d
+
+
 def get_raw_data():
     error_code = 0
-    ocr_reader = "DESKO GmbH Desk0 USB-Device"
-    all_hids = hid.enumerate()
+    all_hids = hid.enumerate(DESKO_VENDOR_ID, DESKO_PRODUCT_ID)
     target_path = None
 
-    for dev_info in all_hids:
-        manufacturer = dev_info.get('manufacturer_string', '') or ''
-        product = dev_info.get('product_string', '') or ''
-        device_name = f"{manufacturer} {product}"
-
-        if ocr_reader in device_name:
-            target_path = dev_info['path']
-            break
+    if all_hids:
+        target_path = all_hids[0]['path']
 
     if target_path is None:
         print("There's not any non system HID class device available")

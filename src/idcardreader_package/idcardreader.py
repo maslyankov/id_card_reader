@@ -1,70 +1,84 @@
 import queue
 import re
+import sys
 from datetime import datetime
 from time import sleep
 
-import pywinusb.hid as hid
+import hid
 
-GLOBAL = False
 q = queue.Queue()
 q.put([])
 
-
-def sample_handler(data):
-    global q
-    global GLOBAL
-
-    tuple_data = []
-    empty_row = [0, 48, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-
-    if data not in [empty_row]:
-        for symbol in data:
-            tuple_data.append(symbol)
-
-        queue_data = q.get()
-        queue_data.append(tuple_data[3:])
-        q.put(queue_data)
-        GLOBAL = True
+# On Windows, hidapi includes the report ID byte in read(); on macOS/Linux it does not.
+# The original pywinusb data was 33 bytes (report ID + 32 bytes report data).
+# The payload starts after the report ID (1 byte) + 2 header bytes = offset 3 on Windows.
+# On macOS/Linux, there's no report ID, so the offset is 2.
+if sys.platform == 'win32':
+    _HEADER_SIZE = 3
+    _EMPTY_ROW = [0, 48] + [0] * 31  # 33 bytes
+else:
+    _HEADER_SIZE = 2
+    _EMPTY_ROW = [48] + [0] * 31  # 32 bytes
 
 
 def get_raw_data():
     error_code = 0
-    exit_counter = 0
     ocr_reader = "DESKO GmbH Desk0 USB-Device"
-    all_hids = hid.find_all_hid_devices()
-    if all_hids:
-        while True:
-            for index, devices in enumerate(all_hids):
+    all_hids = hid.enumerate()
+    target_path = None
 
-                device_name = str("{0.vendor_name} {0.product_name}" \
-                                  "(vID=0x{1:04x}, pID=0x{2:04x})" \
-                                  "".format(devices, devices.vendor_id, devices.product_id))
+    for dev_info in all_hids:
+        manufacturer = dev_info.get('manufacturer_string', '') or ''
+        product = dev_info.get('product_string', '') or ''
+        device_name = f"{manufacturer} {product}"
 
-                if ocr_reader in device_name:
-                    device = all_hids[index]
-                    try:
-                        device.set_raw_data_handler(sample_handler)
-                        device.open()
-                        global GLOBAL
-                        while device.is_plugged():
-                            exit_counter += 1
-                            sleep(0.5)
-                            if GLOBAL or exit_counter == 30:
-                                GLOBAL = False
-                                break
-                    except:
-                        error_code = 2
-                    finally:
+        if ocr_reader in device_name:
+            target_path = dev_info['path']
+            break
 
-                        device.close()
-                        return error_code
-            else:
-                error_code = 2
-                return error_code
-    else:
+    if target_path is None:
         print("There's not any non system HID class device available")
+        return 2
+
+    device = None
+    try:
+        device = hid.device()
+        device.open_path(target_path)
+
+        got_data = False
+        exit_counter = 0
+
+        while exit_counter < 30:
+            exit_counter += 1
+            # Use shorter timeout once data starts arriving to capture the full burst
+            timeout = 100 if got_data else 500
+            data = device.read(64, timeout_ms=timeout)
+
+            if not data:
+                if got_data:
+                    # Data burst finished
+                    break
+                continue
+
+            data_list = list(data)
+            if data_list == _EMPTY_ROW:
+                continue
+
+            got_data = True
+            queue_data = q.get()
+            queue_data.append(data_list[_HEADER_SIZE:])
+            q.put(queue_data)
+
+        if not got_data:
+            error_code = 2
+
+    except Exception:
         error_code = 2
-        return error_code
+    finally:
+        if device:
+            device.close()
+
+    return error_code
 
 
 class IDScanner:
@@ -82,7 +96,7 @@ class IDScanner:
     def parser_row1_P(self, row_string):
         try:
 
-            match_group = re.search('[P][\w<]([\w<]{3})(\w*)<<(\w*).*', row_string)
+            match_group = re.search(r'[P][\w<]([\w<]{3})(\w*)<<(\w*).*', row_string)
 
             issuing_country = match_group.group(1).replace('<', '')
             last_name = match_group.group(2).replace('<', '')
@@ -97,7 +111,7 @@ class IDScanner:
 
     def parser_row2_P(self, row_string):
         try:
-            match_group = re.search('([\w<]{9})[\d]([\w<]{3})([\d]{6})[\d]([MF<])([\d]{6})[\d]([\d]*).*', row_string)
+            match_group = re.search(r'([\w<]{9})[\d]([\w<]{3})([\d]{6})[\d]([MF<])([\d]{6})[\d]([\d]*).*', row_string)
 
             document_id = match_group.group(1).replace('<', '')
             country = match_group.group(2).replace('<', '')
@@ -123,7 +137,7 @@ class IDScanner:
     def parser_row1_ID(self, row_string):
         try:
 
-            match_group = re.search('[IAC][\w<]([\w<]{3})([\w<]{9})[\d<]([\w<]{10}).*', row_string)
+            match_group = re.search(r'[IAC][\w<]([\w<]{3})([\w<]{9})[\d<]([\w<]{10}).*', row_string)
 
             issuing_country = match_group.group(1).replace('<', '')
             document_id = match_group.group(2).replace('<', '')
@@ -140,7 +154,7 @@ class IDScanner:
 
     def parser_row2_ID(self, row_string):
         try:
-            match_group = re.search('([\d]{6})\d([MF<])([\d]{6})[\d<]([\w<]{3}).*', row_string)
+            match_group = re.search(r'([\d]{6})\d([MF<])([\d]{6})[\d<]([\w<]{3}).*', row_string)
 
             date_birth = match_group.group(1).replace('<', '')
             sex = match_group.group(2).replace('<', '')
@@ -162,7 +176,7 @@ class IDScanner:
     def parser_row3_ID(self, row_string):
         try:
 
-            match_group = re.search('(\w*)<<(\w*).*', row_string)
+            match_group = re.search(r'(\w*)<<(\w*).*', row_string)
 
             last_name = match_group.group(1).replace('<', '')
             first_name = match_group.group(2).replace('<', '')

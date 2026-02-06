@@ -11,25 +11,35 @@ DESKO_VENDOR_ID = 0x0744
 DESKO_PRODUCT_ID = 0x001d
 
 
+_PYWINUSB_GOT_DATA = False
+
+
+def _pywinusb_sample_handler(data):
+    """Callback for pywinusb raw data - runs in a separate thread."""
+    global _PYWINUSB_GOT_DATA
+
+    tuple_data = []
+    empty_row = [0, 48, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+    if data not in [empty_row]:
+        for symbol in data:
+            tuple_data.append(symbol)
+
+        queue_data = q.get()
+        queue_data.append(tuple_data[3:])
+        q.put(queue_data)
+        _PYWINUSB_GOT_DATA = True
+
+
 def _get_raw_data_pywinusb(timeout_seconds, debug):
     """Windows backend using pywinusb (async callback model)."""
     import pywinusb.hid as hid
 
+    global _PYWINUSB_GOT_DATA
+    _PYWINUSB_GOT_DATA = False
+
     error_code = 0
-    got_data = False
-
-    def sample_handler(data):
-        nonlocal got_data
-        empty_row = [0, 48] + [0] * 31
-
-        if data != empty_row:
-            if debug:
-                print(f"[DEBUG] Received data (len={len(data)}): {data[:10]}...")
-            queue_data = q.get()
-            queue_data.append(list(data)[3:])
-            q.put(queue_data)
-            got_data = True
-
+    exit_counter = 0
     all_hids = hid.find_all_hid_devices()
 
     if not all_hids:
@@ -38,27 +48,30 @@ def _get_raw_data_pywinusb(timeout_seconds, debug):
 
     if debug:
         print(f"[DEBUG] Found {len(all_hids)} HID device(s)")
+        for index, dev in enumerate(all_hids):
+            print(f"[DEBUG]   #{index}: {dev.vendor_name} {dev.product_name} "
+                  f"(vID=0x{dev.vendor_id:04x}, pID=0x{dev.product_id:04x})")
 
     for index, device in enumerate(all_hids):
-        if debug:
-            print(f"[DEBUG]   #{index}: {device.vendor_name} {device.product_name} "
-                  f"(vID=0x{device.vendor_id:04x}, pID=0x{device.product_id:04x})")
-
         if device.vendor_id == DESKO_VENDOR_ID and device.product_id == DESKO_PRODUCT_ID:
             try:
-                device.set_raw_data_handler(sample_handler)
+                device.set_raw_data_handler(_pywinusb_sample_handler)
                 device.open()
+
+                if debug:
+                    print(f"[DEBUG] Opened device #{index}")
 
                 print("Ready - please scan a document...")
 
-                exit_counter = 0
                 max_iterations = timeout_seconds * 2
-                while device.is_plugged() and exit_counter < max_iterations:
+                while device.is_plugged():
                     exit_counter += 1
                     sleep(0.5)
-                    if got_data:
+                    if _PYWINUSB_GOT_DATA or exit_counter >= max_iterations:
                         if debug:
-                            print(f"[DEBUG] Data received after {exit_counter} iterations")
+                            print(f"[DEBUG] Exit loop: got_data={_PYWINUSB_GOT_DATA}, "
+                                  f"counter={exit_counter}")
+                        _PYWINUSB_GOT_DATA = False
                         break
             except Exception as e:
                 if debug:
@@ -66,10 +79,7 @@ def _get_raw_data_pywinusb(timeout_seconds, debug):
                 error_code = 2
             finally:
                 device.close()
-
-            if not got_data:
-                error_code = 2
-            return error_code
+                return error_code
 
     print("There's not any non system HID class device available")
     return 2

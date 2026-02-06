@@ -4,26 +4,83 @@ import sys
 from datetime import datetime
 from time import sleep
 
-import hid
-
 q = queue.Queue()
 q.put([])
-
-# On Windows, hidapi includes the report ID byte in read(); on macOS/Linux it does not.
-# The original pywinusb data was 33 bytes (report ID + 32 bytes report data).
-# The payload starts after the report ID (1 byte) + 2 header bytes = offset 3 on Windows.
-# On macOS/Linux, there's no report ID, so the offset is 2.
-if sys.platform == 'win32':
-    _HEADER_SIZE = 3
-else:
-    _HEADER_SIZE = 2
-
 
 DESKO_VENDOR_ID = 0x0744
 DESKO_PRODUCT_ID = 0x001d
 
 
-def get_raw_data(timeout_seconds=60, debug=False):
+def _get_raw_data_pywinusb(timeout_seconds, debug):
+    """Windows backend using pywinusb (async callback model)."""
+    import pywinusb.hid as hid
+
+    error_code = 0
+    got_data = False
+
+    def sample_handler(data):
+        nonlocal got_data
+        empty_row = [0, 48] + [0] * 31
+
+        if data != empty_row:
+            if debug:
+                print(f"[DEBUG] Received data (len={len(data)}): {data[:10]}...")
+            queue_data = q.get()
+            queue_data.append(list(data)[3:])
+            q.put(queue_data)
+            got_data = True
+
+    ocr_reader = "DESKO GmbH Desk0 USB-Device"
+    all_hids = hid.find_all_hid_devices()
+
+    if not all_hids:
+        print("There's not any non system HID class device available")
+        return 2
+
+    if debug:
+        print(f"[DEBUG] Found {len(all_hids)} HID device(s)")
+
+    for index, device in enumerate(all_hids):
+        device_name = f"{device.vendor_name} {device.product_name}"
+        if debug:
+            print(f"[DEBUG]   #{index}: {device_name} "
+                  f"(vID=0x{device.vendor_id:04x}, pID=0x{device.product_id:04x})")
+
+        if ocr_reader in device_name:
+            try:
+                device.set_raw_data_handler(sample_handler)
+                device.open()
+
+                print("Ready - please scan a document...")
+
+                exit_counter = 0
+                max_iterations = timeout_seconds * 2
+                while device.is_plugged() and exit_counter < max_iterations:
+                    exit_counter += 1
+                    sleep(0.5)
+                    if got_data:
+                        if debug:
+                            print(f"[DEBUG] Data received after {exit_counter} iterations")
+                        break
+            except Exception as e:
+                if debug:
+                    print(f"[DEBUG] Exception: {e}")
+                error_code = 2
+            finally:
+                device.close()
+
+            if not got_data:
+                error_code = 2
+            return error_code
+
+    print("There's not any non system HID class device available")
+    return 2
+
+
+def _get_raw_data_hidapi(timeout_seconds, debug):
+    """macOS/Linux backend using hidapi (synchronous polling)."""
+    import hid
+
     error_code = 0
     all_hids = hid.enumerate(DESKO_VENDOR_ID, DESKO_PRODUCT_ID)
 
@@ -43,26 +100,20 @@ def get_raw_data(timeout_seconds=60, debug=False):
     try:
         device = hid.device()
         device.open(DESKO_VENDOR_ID, DESKO_PRODUCT_ID)
-        device.set_nonblocking(True)
 
         if debug:
-            print("[DEBUG] Device opened in non-blocking mode")
+            print("[DEBUG] Device opened")
 
         print("Ready - please scan a document...")
 
         got_data = False
         exit_counter = 0
-        max_iterations = timeout_seconds * 2  # ~500ms per iteration
+        max_iterations = timeout_seconds * 2
 
         while exit_counter < max_iterations:
             exit_counter += 1
-            try:
-                data = device.read(64)
-            except Exception as e:
-                if debug:
-                    print(f"[DEBUG] read error at iteration {exit_counter}: {e}")
-                sleep(0.5)
-                continue
+            timeout_ms = 100 if got_data else 500
+            data = device.read(64, timeout_ms=timeout_ms)
 
             if debug and exit_counter <= 10:
                 print(f"[DEBUG] read #{exit_counter}: data={list(data) if data else None}")
@@ -72,17 +123,15 @@ def get_raw_data(timeout_seconds=60, debug=False):
                     if debug:
                         print(f"[DEBUG] Data burst finished after {exit_counter} reads")
                     break
-                sleep(0.1 if got_data else 0.5)
                 continue
 
             data_list = list(data)
-            payload = data_list[_HEADER_SIZE:]
+            # On macOS/Linux, hidapi does not include report ID byte
+            payload = data_list[2:]
 
-            # Skip empty/status reports (payload is all zeros)
             if not any(payload):
                 if debug:
-                    print(f"[DEBUG] Skipping empty report (len={len(data_list)}): {data_list}")
-                sleep(0.5)
+                    print(f"[DEBUG] Skipping empty report: {data_list}")
                 continue
 
             if debug:
@@ -107,6 +156,13 @@ def get_raw_data(timeout_seconds=60, debug=False):
             device.close()
 
     return error_code
+
+
+def get_raw_data(timeout_seconds=60, debug=False):
+    if sys.platform == 'win32':
+        return _get_raw_data_pywinusb(timeout_seconds, debug)
+    else:
+        return _get_raw_data_hidapi(timeout_seconds, debug)
 
 
 class IDScanner:

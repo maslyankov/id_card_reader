@@ -1,1 +1,2 @@
-hidapi
+pywinusb>=0.4.2;sys_platform=='win32'
+hidapi;sys_platform!='win32'

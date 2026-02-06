@@ -24,6 +24,7 @@ setuptools.setup(
     packages=setuptools.find_packages(where="src"),
     python_requires=">=3.7",
     install_requires=[
-        "hidapi",
+        "pywinusb>=0.4.2;sys_platform=='win32'",
+        "hidapi;sys_platform!='win32'",
     ],
 )

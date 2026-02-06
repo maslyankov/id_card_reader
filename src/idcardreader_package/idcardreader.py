@@ -40,46 +40,55 @@ def _get_raw_data_pywinusb(timeout_seconds, debug):
 
     error_code = 0
     exit_counter = 0
-    all_hids = hid.find_all_hid_devices()
 
-    if not all_hids:
+    # Use HidDeviceFilter to find the DESKO reader by VID/PID
+    target_filter = hid.HidDeviceFilter(
+        vendor_id=DESKO_VENDOR_ID,
+        product_id=DESKO_PRODUCT_ID,
+    )
+    devices = target_filter.get_devices()
+
+    if not devices:
         print("There's not any non system HID class device available")
         return 2
 
     if debug:
-        print(f"[DEBUG] Found {len(all_hids)} HID device(s)")
-        for index, dev in enumerate(all_hids):
-            print(f"[DEBUG]   #{index}: {dev.vendor_name} {dev.product_name} "
+        print(f"[DEBUG] Found {len(devices)} matching HID device(s)")
+        for i, dev in enumerate(devices):
+            print(f"[DEBUG]   #{i}: {dev.vendor_name} {dev.product_name} "
                   f"(vID=0x{dev.vendor_id:04x}, pID=0x{dev.product_id:04x})")
 
-    for index, device in enumerate(all_hids):
-        if device.vendor_id == DESKO_VENDOR_ID and device.product_id == DESKO_PRODUCT_ID:
-            try:
-                device.set_raw_data_handler(_pywinusb_sample_handler)
-                device.open()
+    # Try each matching device/collection
+    for idx, device in enumerate(devices):
+        _PYWINUSB_GOT_DATA = False
+        exit_counter = 0
 
-                if debug:
-                    print(f"[DEBUG] Opened device #{index}")
+        try:
+            device.set_raw_data_handler(_pywinusb_sample_handler)
+            device.open()
 
-                print("Ready - please scan a document...")
+            if debug:
+                print(f"[DEBUG] Opened device #{idx}")
 
-                max_iterations = timeout_seconds * 2
-                while device.is_plugged():
-                    exit_counter += 1
-                    sleep(0.5)
-                    if _PYWINUSB_GOT_DATA or exit_counter >= max_iterations:
-                        if debug:
-                            print(f"[DEBUG] Exit loop: got_data={_PYWINUSB_GOT_DATA}, "
-                                  f"counter={exit_counter}")
-                        _PYWINUSB_GOT_DATA = False
-                        break
-            except Exception as e:
-                if debug:
-                    print(f"[DEBUG] Exception: {e}")
-                error_code = 2
-            finally:
-                device.close()
-                return error_code
+            print("Ready - please scan a document...")
+
+            max_iterations = timeout_seconds * 2
+            while device.is_plugged():
+                exit_counter += 1
+                sleep(0.5)
+                if _PYWINUSB_GOT_DATA or exit_counter >= max_iterations:
+                    if debug:
+                        print(f"[DEBUG] Exit loop: got_data={_PYWINUSB_GOT_DATA}, "
+                              f"counter={exit_counter}")
+                    _PYWINUSB_GOT_DATA = False
+                    break
+        except Exception as e:
+            if debug:
+                print(f"[DEBUG] Device #{idx} exception: {e}")
+            error_code = 2
+        finally:
+            device.close()
+            return error_code
 
     print("There's not any non system HID class device available")
     return 2

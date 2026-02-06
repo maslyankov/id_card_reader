@@ -15,10 +15,8 @@ q.put([])
 # On macOS/Linux, there's no report ID, so the offset is 2.
 if sys.platform == 'win32':
     _HEADER_SIZE = 3
-    _EMPTY_ROW = [0, 48] + [0] * 31  # 33 bytes
 else:
     _HEADER_SIZE = 2
-    _EMPTY_ROW = [48] + [0] * 31  # 32 bytes
 
 
 DESKO_VENDOR_ID = 0x0744
@@ -62,12 +60,15 @@ def get_raw_data(timeout_seconds=60):
                 continue
 
             data_list = list(data)
-            if data_list == _EMPTY_ROW:
+            payload = data_list[_HEADER_SIZE:]
+
+            # Skip empty/status reports (payload is all zeros)
+            if not any(payload):
                 continue
 
             got_data = True
             queue_data = q.get()
-            queue_data.append(data_list[_HEADER_SIZE:])
+            queue_data.append(payload)
             q.put(queue_data)
 
         if not got_data:

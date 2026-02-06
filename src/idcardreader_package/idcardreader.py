@@ -23,80 +23,100 @@ DESKO_VENDOR_ID = 0x0744
 DESKO_PRODUCT_ID = 0x001d
 
 
+def _try_read_device(device, timeout_seconds, debug):
+    """Attempt to read MRZ data from an opened HID device.
+    Returns (success, error_code) where success indicates data was read."""
+    got_data = False
+    max_iterations = timeout_seconds * 2  # 500ms per iteration while waiting
+    exit_counter = 0
+
+    while exit_counter < max_iterations:
+        exit_counter += 1
+        # Use shorter timeout once data starts arriving to capture the full burst
+        timeout_ms = 100 if got_data else 500
+        data = device.read(64, timeout_ms=timeout_ms)
+
+        if debug and exit_counter <= 5:
+            print(f"[DEBUG] read #{exit_counter}: data={list(data) if data else None} (len={len(data) if data else 0})")
+
+        if not data:
+            if got_data:
+                if debug:
+                    print(f"[DEBUG] Data burst finished after {exit_counter} reads")
+                break
+            continue
+
+        data_list = list(data)
+        payload = data_list[_HEADER_SIZE:]
+
+        # Skip empty/status reports (payload is all zeros)
+        if not any(payload):
+            if debug:
+                print(f"[DEBUG] Skipping empty report: {data_list}")
+            continue
+
+        if debug:
+            print(f"[DEBUG] Got data report: {data_list}")
+
+        got_data = True
+        queue_data = q.get()
+        queue_data.append(payload)
+        q.put(queue_data)
+
+    return got_data
+
+
 def get_raw_data(timeout_seconds=60, debug=False):
     error_code = 0
     all_hids = hid.enumerate(DESKO_VENDOR_ID, DESKO_PRODUCT_ID)
-    target_path = None
 
-    if all_hids:
-        target_path = all_hids[0]['path']
-        if debug:
-            print(f"[DEBUG] Found device: {all_hids[0]}")
-
-    if target_path is None:
+    if not all_hids:
         print("There's not any non system HID class device available")
         return 2
 
-    device = None
-    try:
-        device = hid.device()
-        device.open_path(target_path)
+    if debug:
+        print(f"[DEBUG] Found {len(all_hids)} HID interface(s) for DESKO device:")
+        for i, dev_info in enumerate(all_hids):
+            print(f"[DEBUG]   #{i}: usage_page=0x{dev_info.get('usage_page', 0):04x} "
+                  f"usage=0x{dev_info.get('usage', 0):04x} "
+                  f"interface={dev_info.get('interface_number', -1)} "
+                  f"path={dev_info.get('path')}")
 
-        print("Ready - please scan a document...")
-
-        got_data = False
-        # Wait up to timeout_seconds for the first scan, then read the burst quickly
-        max_iterations = timeout_seconds * 2  # 500ms per iteration while waiting
-        exit_counter = 0
-
-        while exit_counter < max_iterations:
-            exit_counter += 1
-            # Use shorter timeout once data starts arriving to capture the full burst
-            timeout_ms = 100 if got_data else 500
-            data = device.read(64, timeout_ms=timeout_ms)
-
-            if debug and exit_counter <= 5:
-                print(f"[DEBUG] read #{exit_counter}: data={list(data) if data else None} (len={len(data) if data else 0})")
-
-            if not data:
-                if got_data:
-                    if debug:
-                        print(f"[DEBUG] Data burst finished after {exit_counter} reads")
-                    # Data burst finished
-                    break
-                continue
-
-            data_list = list(data)
-            payload = data_list[_HEADER_SIZE:]
-
-            # Skip empty/status reports (payload is all zeros)
-            if not any(payload):
-                if debug:
-                    print(f"[DEBUG] Skipping empty report: {data_list}")
-                continue
+    # Try each HID interface until one works (devices often expose multiple)
+    for idx, dev_info in enumerate(all_hids):
+        device = None
+        try:
+            device = hid.device()
+            device.open_path(dev_info['path'])
 
             if debug:
-                print(f"[DEBUG] Got data report: {data_list}")
+                print(f"[DEBUG] Opened interface #{idx}, testing read...")
 
-            got_data = True
-            queue_data = q.get()
-            queue_data.append(payload)
-            q.put(queue_data)
-
-        if not got_data:
+            # Test read to check if this interface supports reading
+            test_data = device.read(64, timeout_ms=200)
             if debug:
-                print(f"[DEBUG] No data received after {exit_counter} reads")
-            error_code = 2
+                print(f"[DEBUG] Test read OK: {list(test_data) if test_data else None}")
 
-    except Exception as e:
-        if debug:
-            print(f"[DEBUG] Exception: {e}")
-        error_code = 2
-    finally:
-        if device:
-            device.close()
+            print("Ready - please scan a document...")
 
-    return error_code
+            got_data = _try_read_device(device, timeout_seconds, debug)
+
+            if not got_data:
+                error_code = 2
+            return error_code
+
+        except Exception as e:
+            if debug:
+                print(f"[DEBUG] Interface #{idx} failed: {e}")
+            continue
+        finally:
+            if device:
+                device.close()
+
+    # All interfaces failed
+    if debug:
+        print("[DEBUG] All HID interfaces failed")
+    return 2
 
 
 class IDScanner:

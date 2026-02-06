@@ -1,50 +1,74 @@
 id_card_reader
 =============
-Python driver for DESKO IDenty chrom  
-link <https://www.desko.com/site/assets/files/2782/desko_identy-chrom.pdf>  
-Script was develop for  REST API to help load customer data 
+Python driver for DESKO IDenty chrom
+link <https://www.desko.com/site/assets/files/2782/desko_identy-chrom.pdf>
+Extracts user data from passport or ID card MRZ (Machine Readable Zone) via USB HID.
 
-Script extract user data from passport or ID
+Works on Windows, macOS, and Linux.
 
-### USAGE 
-In your virtual environment install external libraries
-> pip install -r requirement.txt
+### Requirements
+- Python >= 3.7
+- [hidapi](https://pypi.org/project/hidapi/)
 
-run script
-> python example.py
+### Installation
+In your virtual environment install dependencies:
+```
+pip install -r requirement.txt
+```
 
+### Usage
+Run the example script:
+```
+python example.py
+```
 
-Or in your code import idcardreader.py   
-> from idcardreader import get_user_data   
-> customer_data, error_code = get_user_data()  
+Or import in your own code:
+```python
+from idcardreader_package.idcardreader import get_user_data
 
-If reader get error (you move quick with ID or data are not readable, ...) script return error_code different than 0  
-error_code == 1 its parsing error, when regex canot parse data  
-error_code == 2 its card reader sys error (like reader is not connected, reading error,...)
+customer_data, error_code = get_user_data()
+```
 
-In success customer_data will be filled with a dictionary in format:
-* PASSPORT  
+The script will print "Ready - please scan a document..." and wait up to 60 seconds for a scan.
+
+### Error codes
+- `0` - Success
+- `1` - Parsing error (regex could not parse the MRZ data)
+- `2` - System error (reader not connected, read timeout, communication failure)
+
+### Output format
+On success `customer_data` is a dictionary:
+
+**Passport:**
+```
 {
-"issuing_country": ....,  
-"last_name": ....,  
-"first_name": ....,  
-"document_id": ....,  
-"date_birth": ....,  
-"sex": ....,  
-"date_expiration": ....,  
-"country": ....,  
-"personal_id": ....,  
+    "document_type": "P",
+    "issuing_country": ...,
+    "last_name": ...,
+    "first_name": ...,
+    "document_id": ...,
+    "date_birth": ...,
+    "sex": ...,
+    "date_expiration": ...,
+    "country": ...,
+    "personal_id": ...,
 }
+```
 
-* ID  
+**ID card:**
+```
 {
-"issuing_country": ....,  
-"document_id": ....,  
-"personal_id": ....,  
-"date_birth": ....,  
-"sex": ....,  
-"date_expiration": ....,  
-"country": ....,  
-"last_name": ....,  
-"first_name": ....,  
+    "document_type": "I",
+    "issuing_country": ...,
+    "document_id": ...,
+    "personal_id": ...,
+    "date_birth": ...,
+    "sex": ...,
+    "date_expiration": ...,
+    "country": ...,
+    "last_name": ...,
+    "first_name": ...,
 }
+```
+
+`date_birth` and `date_expiration` are `datetime` objects. All other fields are strings.
